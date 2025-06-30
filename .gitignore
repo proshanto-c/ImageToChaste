@@ -2,3 +2,6 @@ dev/
 data/
 sam/
 outs/
+chaste_files/
+build/
+.vscode/
