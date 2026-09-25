@@ -24,20 +24,39 @@ from imagetochaste.segmentation.sam_adapter import SAMAdapter
 from imagetochaste.segmentation.utils import create_mask_overlay
 
 
-def load_image_array(image_input: Union[str, Path, np.ndarray, Image.Image]) -> np.ndarray:
+def load_image_array(image_input: Any) -> np.ndarray:
     """
     Standardize various image input formats to a uint8 RGB numpy array.
     """
+    if image_input is None:
+        raise ValueError("Image input is None.")
     if isinstance(image_input, np.ndarray):
         if image_input.ndim == 2:
             return np.stack([image_input] * 3, axis=-1).astype(np.uint8)
-        elif image_input.shape[2] == 4:
+        elif image_input.ndim == 3 and image_input.shape[2] == 4:
             return image_input[:, :, :3].astype(np.uint8)
+        elif image_input.ndim == 3 and image_input.shape[2] == 1:
+            return np.concatenate([image_input] * 3, axis=-1).astype(np.uint8)
         return image_input.astype(np.uint8)
     elif isinstance(image_input, Image.Image):
         return np.array(image_input.convert("RGB"), dtype=np.uint8)
-    else:
+    elif isinstance(image_input, (str, Path)):
         path = Path(image_input)
+        if not path.exists():
+            raise FileNotFoundError(f"Image file not found: {path}")
+        pil_img = Image.open(path).convert("RGB")
+        return np.array(pil_img, dtype=np.uint8)
+    elif isinstance(image_input, dict):
+        for k in ("composite", "image", "background", "path"):
+            if k in image_input and image_input[k] is not None:
+                return load_image_array(image_input[k])
+        raise ValueError(f"Unrecognized image dictionary keys: {list(image_input.keys())}")
+    elif hasattr(image_input, "path") and isinstance(image_input.path, str):
+        return load_image_array(image_input.path)
+    elif hasattr(image_input, "name") and isinstance(image_input.name, str) and not isinstance(image_input, Path):
+        return load_image_array(image_input.name)
+    else:
+        path = Path(str(image_input))
         if not path.exists():
             raise FileNotFoundError(f"Image file not found: {path}")
         pil_img = Image.open(path).convert("RGB")
@@ -157,7 +176,10 @@ def calibrate(
         per_image_overlays = []
 
         for idx, (raw_img, work_img) in enumerate(zip(loaded_images, working_images)):
-            masks, stats = adapter.generate_masks(work_img, generator=generator, filter_area=True)
+            try:
+                masks, stats = adapter.generate_masks(work_img, generator=generator, filter_area=True)
+            except TypeError:
+                masks, stats = adapter.generate_masks(work_img, amg_params=cand_params, filter_area=True)
             count = len(masks)
             per_image_counts.append(count)
 
@@ -301,7 +323,10 @@ def deploy(
         else:
             working_img = raw_img
 
-        masks, stats = adapter.generate_masks(working_img, generator=generator, filter_area=True)
+        try:
+            masks, stats = adapter.generate_masks(working_img, generator=generator, filter_area=True)
+        except TypeError:
+            masks, stats = adapter.generate_masks(working_img, amg_params=calibrated_params, filter_area=True)
         cell_count = len(masks)
         total_cells += cell_count
 

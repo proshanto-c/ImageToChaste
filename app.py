@@ -3,9 +3,11 @@ Gradio web application for ImageToChaste.
 Can be run locally or deployed directly to Hugging Face Spaces with ZeroGPU.
 """
 
+import json
 import shutil
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 try:
     import spaces
@@ -34,35 +36,6 @@ try:
 except ImportError:
     from imagetochaste.geometry.centroids import compute_centroids_from_masks
 
-try:
-    from imagetochaste import calibrate, deploy
-except ImportError:
-    try:
-        from imagetochaste.calibration import calibrate, deploy
-    except ImportError:
-        import subprocess
-        import sys
-
-        print("Updating imagetochaste in container...")
-        try:
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--upgrade",
-                    "--no-cache-dir",
-                    "git+https://github.com/proshanto-c/ImageToChaste.git@v0.2.1",
-                ],
-                check=True,
-            )
-            from imagetochaste.calibration import calibrate, deploy
-        except Exception as e:
-            print(f"Auto-upgrade notice: {e}")
-            calibrate = None
-            deploy = None
-
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
 
@@ -78,12 +51,327 @@ def get_adapter():
     return _ADAPTER
 
 
+def _extract_file_path(f: Any) -> Optional[str]:
+    """Safely extract local file path from strings, Path, Gradio FileData, or TemporaryFileWrapper."""
+    if f is None:
+        return None
+    if isinstance(f, str):
+        return f
+    if isinstance(f, Path):
+        return str(f)
+    if hasattr(f, "path") and isinstance(f.path, str):
+        return f.path
+    if hasattr(f, "name") and isinstance(f.name, str) and not isinstance(f, Path):
+        return f.name
+    if isinstance(f, dict):
+        return f.get("path") or f.get("name")
+    return str(f)
+
+
+def load_image_array(image_input: Any) -> np.ndarray:
+    """
+    Standardize various image input formats to a uint8 RGB numpy array.
+    Supports numpy arrays, PIL Images, paths, and Gradio Image/Editor dicts.
+    """
+    if image_input is None:
+        raise ValueError("Image input is None.")
+    if isinstance(image_input, np.ndarray):
+        if image_input.ndim == 2:
+            return np.stack([image_input] * 3, axis=-1).astype(np.uint8)
+        elif image_input.ndim == 3 and image_input.shape[2] == 4:
+            return image_input[:, :, :3].astype(np.uint8)
+        elif image_input.ndim == 3 and image_input.shape[2] == 1:
+            return np.concatenate([image_input] * 3, axis=-1).astype(np.uint8)
+        return image_input.astype(np.uint8)
+    elif isinstance(image_input, Image.Image):
+        return np.array(image_input.convert("RGB"), dtype=np.uint8)
+    elif isinstance(image_input, (str, Path)):
+        path = Path(image_input)
+        if not path.exists():
+            raise FileNotFoundError(f"Image file not found: {path}")
+        pil_img = Image.open(path).convert("RGB")
+        return np.array(pil_img, dtype=np.uint8)
+    elif isinstance(image_input, dict):
+        for k in ("composite", "image", "background", "path"):
+            if k in image_input and image_input[k] is not None:
+                return load_image_array(image_input[k])
+        raise ValueError(f"Unrecognized image dictionary keys: {list(image_input.keys())}")
+    elif hasattr(image_input, "path") and isinstance(image_input.path, str):
+        return load_image_array(image_input.path)
+    elif hasattr(image_input, "name") and isinstance(image_input.name, str) and not isinstance(image_input, Path):
+        return load_image_array(image_input.name)
+    else:
+        path = Path(str(image_input))
+        if not path.exists():
+            raise FileNotFoundError(f"Image file not found: {path}")
+        pil_img = Image.open(path).convert("RGB")
+        return np.array(pil_img, dtype=np.uint8)
+
+
+def safe_generate_masks(
+    adapter: SAMAdapter,
+    image_arr: np.ndarray,
+    generator: Any = None,
+    cand_params: Optional[Dict[str, Any]] = None,
+):
+    """
+    Execute mask generation safely across different SAMAdapter versions.
+    If generator keyword argument is rejected by older adapter, falls back to amg_params.
+    """
+    if generator is not None:
+        try:
+            return adapter.generate_masks(image_arr, generator=generator, filter_area=True)
+        except TypeError:
+            pass
+    return adapter.generate_masks(image_arr, amg_params=cand_params, filter_area=True)
+
+
+# Master's thesis calibrated AMG presets
+AMG_PRESETS = {
+    "conservative": {
+        "points_per_side": 32,
+        "points_per_batch": 128,
+        "pred_iou_thresh": 0.85,
+        "stability_score_thresh": 0.35,
+        "crop_n_layers": 1,
+        "crop_nms_thresh": 0.70,
+        "crop_overlap_ratio": 512 / 1500,
+        "min_mask_region_area": 15,
+        "use_m2m": False,
+        "multimask_output": True,
+    },
+    "balanced": {
+        "points_per_side": 32,
+        "points_per_batch": 128,
+        "pred_iou_thresh": 0.75,
+        "stability_score_thresh": 0.20,
+        "crop_n_layers": 2,
+        "crop_nms_thresh": 0.70,
+        "crop_overlap_ratio": 512 / 1500,
+        "min_mask_region_area": 10,
+        "use_m2m": False,
+        "multimask_output": True,
+    },
+    "sensitive": {
+        "points_per_side": 32,
+        "points_per_batch": 128,
+        "pred_iou_thresh": 0.65,
+        "stability_score_thresh": 0.12,
+        "crop_n_layers": 2,
+        "crop_nms_thresh": 0.70,
+        "crop_overlap_ratio": 512 / 1500,
+        "min_mask_region_area": 8,
+        "use_m2m": False,
+        "multimask_output": True,
+    },
+}
+
+
+def run_calibrate(
+    images: Union[str, Path, np.ndarray, Image.Image, List[Any]],
+    expected_cell_count: Optional[int] = None,
+    candidate_profiles: Optional[List[str]] = None,
+    adapter: Optional[SAMAdapter] = None,
+    preprocess: bool = True,
+    output_dir: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """Execute calibration pipeline with safe fallback."""
+    if not isinstance(images, list):
+        image_list = [images]
+    else:
+        image_list = images
+
+    if not image_list:
+        raise ValueError("At least one image must be provided.")
+
+    loaded_images = [load_image_array(img) for img in image_list]
+    working_images = [
+        preprocess_microscopy_image(img, clahe_clip_limit=3.0) if preprocess else img
+        for img in loaded_images
+    ]
+
+    if adapter is None:
+        adapter = get_adapter()
+
+    if candidate_profiles is None:
+        candidate_profiles = ["conservative", "balanced", "sensitive"]
+
+    candidates = [
+        {"name": name, "params": dict(AMG_PRESETS[name])}
+        for name in candidate_profiles
+        if name in AMG_PRESETS
+    ]
+
+    out_path = Path(output_dir) if output_dir else None
+    if out_path:
+        out_path.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for cand in candidates:
+        cand_name = cand["name"]
+        cand_params = cand["params"]
+        generator = adapter.get_mask_generator(**cand_params)
+        per_image_counts = []
+
+        for idx, (raw_img, work_img) in enumerate(zip(loaded_images, working_images)):
+            masks, stats = safe_generate_masks(
+                adapter, work_img, generator=generator, cand_params=cand_params
+            )
+            count = len(masks)
+            per_image_counts.append(count)
+
+            overlay = create_mask_overlay(raw_img, masks, alpha=0.5, draw_borders=True)
+            if out_path:
+                img_f = out_path / f"calibration_{cand_name}_img{idx}.png"
+                Image.fromarray(overlay).save(img_f)
+
+        mean_detected = float(np.mean(per_image_counts))
+        if expected_cell_count is not None and expected_cell_count > 0:
+            pct_error = float(abs(mean_detected - expected_cell_count) / expected_cell_count * 100.0)
+        else:
+            pct_error = 0.0
+
+        results.append({
+            "name": cand_name,
+            "params": cand_params,
+            "detected_counts": per_image_counts,
+            "mean_detected_count": mean_detected,
+            "expected_cell_count": expected_cell_count,
+            "percent_error": round(pct_error, 2),
+        })
+
+    if expected_cell_count is not None and expected_cell_count > 0:
+        sorted_results = sorted(results, key=lambda x: x["percent_error"])
+    else:
+        sorted_results = sorted(results, key=lambda x: 0 if x["name"] == "balanced" else 1)
+
+    best = sorted_results[0]
+    output_payload = {
+        "best_profile": best["name"],
+        "calibrated_params": best["params"],
+        "expected_cell_count": expected_cell_count,
+        "mean_detected_count": best["mean_detected_count"],
+        "percent_error": best["percent_error"],
+        "all_candidates": sorted_results,
+    }
+
+    if out_path:
+        calib_file = out_path / "calibration.json"
+        with open(calib_file, "w", encoding="utf-8") as f:
+            json.dump(output_payload, f, indent=2)
+        output_payload["calibration_file"] = str(calib_file)
+
+    return output_payload
+
+
+def run_deploy(
+    images: List[Path],
+    calibration: Union[str, Path, Dict[str, Any]],
+    output_dir: Union[str, Path] = "outputs/deployed",
+    mode: str = "voronoi",
+    adapter: Optional[SAMAdapter] = None,
+    preprocess: bool = True,
+) -> Dict[str, Any]:
+    """Execute deploy pipeline with safe fallback."""
+    if isinstance(calibration, (str, Path)):
+        calib_path = Path(calibration)
+        if calib_path.exists():
+            with open(calib_path, "r", encoding="utf-8") as f:
+                calib_data = json.load(f)
+        else:
+            calib_data = {}
+    elif isinstance(calibration, dict):
+        calib_data = calibration
+    else:
+        calib_data = {}
+
+    calibrated_params = calib_data.get("calibrated_params", AMG_PRESETS["balanced"])
+
+    if adapter is None:
+        adapter = get_adapter()
+
+    generator = adapter.get_mask_generator(**calibrated_params)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    frame_results = []
+    total_cells = 0
+    t0_batch = time.time()
+
+    for idx, img_path in enumerate(images):
+        t0_frame = time.time()
+        raw_img = load_image_array(img_path)
+        h, w, _ = raw_img.shape
+
+        working_img = (
+            preprocess_microscopy_image(raw_img, clahe_clip_limit=3.0) if preprocess else raw_img
+        )
+        masks, stats = safe_generate_masks(
+            adapter, working_img, generator=generator, cand_params=calibrated_params
+        )
+        cell_count = len(masks)
+        total_cells += cell_count
+
+        centroids = compute_centroids_from_masks(masks)
+        stem = img_path.stem
+        frame_out_dir = out_dir / stem
+        frame_out_dir.mkdir(parents=True, exist_ok=True)
+
+        exported_files = {}
+        if mode == "centroids":
+            nodes_f = export_chaste_nodes(centroids, frame_out_dir / f"{stem}.nodes")
+            exported_files["nodes"] = str(nodes_f)
+            num_nodes = len(centroids)
+            num_elements = 0
+        else:
+            mesh = build_voronoi_mesh(centroids, bounding_box=(0, 0, w, h))
+            nodes_f, elem_f = export_chaste_vertex_mesh(mesh, frame_out_dir / stem)
+            exported_files["nodes"] = str(nodes_f)
+            exported_files["elements"] = str(elem_f)
+            exported_files["chaste_node_native"] = str(frame_out_dir / f"{stem}.node")
+            exported_files["chaste_cell_native"] = str(frame_out_dir / f"{stem}.cell")
+            num_nodes = mesh.num_nodes
+            num_elements = mesh.num_elements
+
+        overlay = create_mask_overlay(raw_img, masks, alpha=0.5, draw_borders=True)
+        overlay_file = frame_out_dir / f"{stem}_overlay.png"
+        Image.fromarray(overlay).save(overlay_file)
+        exported_files["overlay"] = str(overlay_file)
+
+        frame_results.append({
+            "frame_index": idx,
+            "filename": img_path.name,
+            "detected_cells": cell_count,
+            "nodes_count": num_nodes,
+            "elements_count": num_elements,
+            "processing_seconds": round(time.time() - t0_frame, 2),
+            "files": exported_files,
+        })
+
+    summary_payload = {
+        "total_frames_processed": len(images),
+        "total_cells_detected": total_cells,
+        "average_cells_per_frame": round(total_cells / max(1, len(images)), 1),
+        "total_batch_time_seconds": round(time.time() - t0_batch, 2),
+        "calibrated_profile_used": calib_data.get("best_profile", "custom"),
+        "mode": mode,
+        "frames": frame_results,
+    }
+
+    summary_file = out_dir / "deployment_summary.json"
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+
+    summary_payload["summary_file"] = str(summary_file)
+    return summary_payload
+
+
 @spaces.GPU(duration=120)
-def process_microscopy_scan(image: Image.Image, preprocess: bool, mode: str):
+def process_microscopy_scan(image: Any, preprocess: bool, mode: str):
     if image is None:
         return None, None, None, "Please upload or select a microscopy image."
 
-    img_arr = np.array(image.convert("RGB"))
+    img_arr = load_image_array(image)
     h, w, _ = img_arr.shape
 
     # 1. Pre-process image if requested
@@ -97,7 +385,12 @@ def process_microscopy_scan(image: Image.Image, preprocess: bool, mode: str):
     masks, stats = adapter.generate_masks(working_img, filter_area=True)
 
     if not masks:
-        return None, None, None, "No cell masks detected. Try enabling pre-processing or adjusting thresholds."
+        return (
+            None,
+            None,
+            None,
+            "No cell masks detected. Try enabling pre-processing or adjusting thresholds.",
+        )
 
     # 3. Create visual overlay
     overlay = create_mask_overlay(img_arr, masks, alpha=0.5, draw_borders=True)
@@ -126,27 +419,26 @@ def process_microscopy_scan(image: Image.Image, preprocess: bool, mode: str):
 
 
 @spaces.GPU(duration=120)
-def run_calibration_ui(image: Image.Image, expected_cells: Optional[int], preprocess: bool):
+def run_calibration_ui(image: Any, expected_cells: Any, preprocess: bool):
     if image is None:
         return None, None, None, "Please upload a reference training frame.", None
 
-    if calibrate is None:
-        return (
-            None,
-            None,
-            None,
-            "⚠️ The currently installed version of `imagetochaste` in this container is older than v0.2.0.\n"
-            "Please click **Factory reboot** in your Space Settings (or update `requirements.txt`) to pull v0.2.0.",
-            None,
-        )
+    expected_cell_count = None
+    if expected_cells is not None:
+        try:
+            val = int(float(expected_cells))
+            if val > 0:
+                expected_cell_count = val
+        except (ValueError, TypeError):
+            expected_cell_count = None
 
     adapter = get_adapter()
     out_dir = Path("outputs/calibration_ui")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    calib = calibrate(
+    calib = run_calibrate(
         images=image,
-        expected_cell_count=int(expected_cells) if expected_cells and expected_cells > 0 else None,
+        expected_cell_count=expected_cell_count,
         candidate_profiles=["conservative", "balanced", "sensitive"],
         adapter=adapter,
         preprocess=preprocess,
@@ -161,6 +453,7 @@ def run_calibration_ui(image: Image.Image, expected_cells: Optional[int], prepro
     img_bal = Image.open(f_bal) if f_bal.exists() else None
     img_sens = Image.open(f_sens) if f_sens.exists() else None
 
+    target_str = str(expected_cell_count) if expected_cell_count is not None else "N/A"
     lines = [
         f"### 🎯 Calibration Report: Best Match = **{calib['best_profile'].upper()}**",
         "",
@@ -169,31 +462,31 @@ def run_calibration_ui(image: Image.Image, expected_cells: Optional[int], prepro
     ]
     for c in calib["all_candidates"]:
         lines.append(
-            f"| **{c['name'].capitalize()}** | {int(c['mean_detected_count'])} | {expected_cells or 'N/A'} | {c['percent_error']}% |"
+            f"| **{c['name'].capitalize()}** | {int(c['mean_detected_count'])} | {target_str} | {c['percent_error']}% |"
         )
 
-    lines.append("\n*Download `calibration.json` below to deploy these parameters across batch timelapses.*")
-    calib_json = str(out_dir / "calibration.json")
+    lines.append(
+        "\n*Download `calibration.json` below to deploy these parameters across batch timelapses.*"
+    )
+    calib_json = (
+        str(out_dir / "calibration.json") if (out_dir / "calibration.json").exists() else None
+    )
 
     return img_cons, img_bal, img_sens, "\n".join(lines), calib_json
 
 
 @spaces.GPU(duration=120)
 def run_deployment_ui(
-    files: List[gr.utils.NamedString],
-    calib_file: Optional[gr.utils.NamedString],
+    files: Any,
+    calib_file: Any,
     mode: str,
     preprocess: bool,
 ):
     if not files:
         return None, "Please upload one or more timelapse frames."
 
-    if deploy is None:
-        return (
-            None,
-            "⚠️ The currently installed version of `imagetochaste` in this container is older than v0.2.0.\n"
-            "Please click **Factory reboot** in your Space Settings (or update `requirements.txt`) to pull v0.2.0.",
-        )
+    if not isinstance(files, (list, tuple)):
+        files = [files]
 
     adapter = get_adapter()
     deploy_in = Path("outputs/deploy_ui_input")
@@ -209,14 +502,22 @@ def run_deployment_ui(
 
     img_paths = []
     for f in files:
-        dest = deploy_in / Path(f.name).name
-        shutil.copy(f.name, dest)
-        img_paths.append(dest)
+        f_path = _extract_file_path(f)
+        if f_path and Path(f_path).exists():
+            dest = deploy_in / Path(f_path).name
+            shutil.copy(f_path, dest)
+            img_paths.append(dest)
 
-    config_source = calib_file.name if calib_file else {"calibrated_params": {}}
+    if not img_paths:
+        return None, "No valid image files found in upload."
+
+    calib_path = _extract_file_path(calib_file)
+    config_source = (
+        calib_path if (calib_path and Path(calib_path).exists()) else {"calibrated_params": {}}
+    )
 
     mesh_mode = "centroids" if "Centroids" in mode else "voronoi"
-    summary = deploy(
+    summary = run_deploy(
         images=img_paths,
         calibration=config_source,
         output_dir=deploy_out,
@@ -258,7 +559,9 @@ with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
             with gr.Row():
                 with gr.Column():
                     input_img = gr.Image(type="pil", label="Upload Microscopy Scan")
-                    preprocess_chk = gr.Checkbox(value=True, label="Apply CLAHE & Illumination Flattening")
+                    preprocess_chk = gr.Checkbox(
+                        value=True, label="Apply CLAHE & Illumination Flattening"
+                    )
                     mode_radio = gr.Radio(
                         ["NodesOnlyMesh (Centroids)", "VertexMesh (Polygons)"],
                         value="VertexMesh (Polygons)",
@@ -274,7 +577,9 @@ with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
                     if Path(example_f2).exists():
                         examples.append([example_f2, True, "NodesOnlyMesh (Centroids)"])
                     if examples:
-                        gr.Examples(examples=examples, inputs=[input_img, preprocess_chk, mode_radio])
+                        gr.Examples(
+                            examples=examples, inputs=[input_img, preprocess_chk, mode_radio]
+                        )
 
                 with gr.Column():
                     output_img = gr.Image(type="numpy", label="Segmented Cell Overlay")
@@ -297,7 +602,9 @@ with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
             with gr.Row():
                 with gr.Column():
                     calib_input = gr.Image(type="pil", label="Reference Training Frame")
-                    expected_cells_input = gr.Number(value=300, label="Approximate Target Cell Count")
+                    expected_cells_input = gr.Number(
+                        value=300, label="Approximate Target Cell Count"
+                    )
                     calib_prep_chk = gr.Checkbox(value=True, label="Apply CLAHE Pre-processing")
                     calib_btn = gr.Button("Run Calibration Sweep", variant="primary")
 
@@ -313,7 +620,13 @@ with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
             calib_btn.click(
                 fn=run_calibration_ui,
                 inputs=[calib_input, expected_cells_input, calib_prep_chk],
-                outputs=[preview_cons, preview_bal, preview_sens, calib_summary, download_calib_json],
+                outputs=[
+                    preview_cons,
+                    preview_bal,
+                    preview_sens,
+                    calib_summary,
+                    download_calib_json,
+                ],
             )
 
         # --- TAB 3: Batch Timelapse Deployment ---
@@ -323,9 +636,17 @@ with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
             )
             with gr.Row():
                 with gr.Column():
-                    batch_files = gr.File(file_count="multiple", label="Upload Timelapse Frames (PNG, TIF, JPG)")
-                    batch_calib_file = gr.File(label="Upload calibration.json (Optional: defaults to thesis parameters)")
-                    batch_mode = gr.Radio(["VertexMesh (Polygons)", "NodesOnlyMesh (Centroids)"], value="VertexMesh (Polygons)", label="Chaste Mesh Mode")
+                    batch_files = gr.File(
+                        file_count="multiple", label="Upload Timelapse Frames (PNG, TIF, JPG)"
+                    )
+                    batch_calib_file = gr.File(
+                        label="Upload calibration.json (Optional: defaults to thesis parameters)"
+                    )
+                    batch_mode = gr.Radio(
+                        ["VertexMesh (Polygons)", "NodesOnlyMesh (Centroids)"],
+                        value="VertexMesh (Polygons)",
+                        label="Chaste Mesh Mode",
+                    )
                     batch_prep = gr.Checkbox(value=True, label="Apply CLAHE Pre-processing")
                     batch_btn = gr.Button("Deploy Across Batch", variant="primary")
 

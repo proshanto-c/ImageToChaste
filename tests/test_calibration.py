@@ -131,3 +131,31 @@ def test_deploy_pipeline(tmp_path: Path):
     assert (f1_dir / "frame_001.nodes").exists()
     assert (f1_dir / "frame_001.elements").exists()
     assert (f1_dir / "frame_001_overlay.png").exists()
+
+
+def test_calibrate_legacy_adapter_signature(tmp_path: Path):
+    """Verify calibrate seamlessly handles legacy adapters where generate_masks lacks generator."""
+    test_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    mock_adapter = MagicMock()
+
+    def legacy_generate(image, filter_area=True, preprocess=False, amg_params=None):
+        # Strict signature: raises TypeError if called with generator=...
+        masks = [np.zeros((100, 100), dtype=bool) for _ in range(10)]
+        for i, m in enumerate(masks):
+            m[10 + i * 4 : 12 + i * 4, 10 + i * 4 : 12 + i * 4] = True
+        return masks, {"initial_count": 10}
+
+    mock_adapter.generate_masks.side_effect = legacy_generate
+    mock_adapter.get_mask_generator.return_value = MagicMock()
+
+    out_dir = tmp_path / "legacy_calib"
+    result = calibrate(
+        images=[test_img],
+        expected_cell_count=10,
+        candidate_profiles=["balanced"],
+        adapter=mock_adapter,
+        output_dir=out_dir,
+    )
+    assert result["mean_detected_count"] == 10.0
+    assert result["percent_error"] == 0.0
+

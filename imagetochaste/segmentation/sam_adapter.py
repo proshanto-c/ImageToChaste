@@ -151,6 +151,7 @@ class SAMAdapter:
         filter_area: bool = True,
         preprocess: bool = False,
         amg_params: Optional[Dict[str, Any]] = None,
+        generator: Optional[Any] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Automatically segment all cells across an entire microscopy scan.
@@ -160,6 +161,7 @@ class SAMAdapter:
             filter_area: Whether to apply two-stage statistical area outlier rejection.
             preprocess: Whether to run CLAHE and illumination correction first.
             amg_params: Custom AMG hyperparameter dictionary.
+            generator: Pre-instantiated mask generator instance.
 
         Returns:
             Tuple of (list_of_mask_dicts, metadata_dict)
@@ -170,7 +172,8 @@ class SAMAdapter:
         if preprocess:
             img_arr = preprocess_microscopy_image(img_arr)
 
-        generator = self.get_mask_generator(**(amg_params or {}))
+        if generator is None:
+            generator = self.get_mask_generator(**(amg_params or {}))
 
         # Perform inference
         if self.device.type == "cuda":
