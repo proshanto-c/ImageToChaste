@@ -12,11 +12,15 @@ from PIL import Image
 from imagetochaste import (
     SAMAdapter,
     build_voronoi_mesh,
-    compute_centroids_from_masks,
     export_chaste_nodes,
     export_chaste_vertex_mesh,
     preprocess_microscopy_image,
 )
+
+try:
+    from imagetochaste import compute_centroids_from_masks
+except ImportError:
+    from imagetochaste.geometry.centroids import compute_centroids_from_masks
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
 
