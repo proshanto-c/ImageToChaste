@@ -24,8 +24,6 @@ from PIL import Image
 from imagetochaste import (
     SAMAdapter,
     build_voronoi_mesh,
-    calibrate,
-    deploy,
     export_chaste_nodes,
     export_chaste_vertex_mesh,
     preprocess_microscopy_image,
@@ -35,6 +33,15 @@ try:
     from imagetochaste import compute_centroids_from_masks
 except ImportError:
     from imagetochaste.geometry.centroids import compute_centroids_from_masks
+
+try:
+    from imagetochaste import calibrate, deploy
+except ImportError:
+    try:
+        from imagetochaste.calibration import calibrate, deploy
+    except ImportError:
+        calibrate = None
+        deploy = None
 
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
@@ -110,6 +117,16 @@ def run_calibration_ui(image: Image.Image, expected_cells: Optional[int], prepro
     if image is None:
         return None, None, None, "Please upload a reference training frame.", None
 
+    if calibrate is None:
+        return (
+            None,
+            None,
+            None,
+            "⚠️ The currently installed version of `imagetochaste` in this container is older than v0.2.0.\n"
+            "Please click **Factory reboot** in your Space Settings (or update `requirements.txt`) to pull v0.2.0.",
+            None,
+        )
+
     adapter = get_adapter()
     out_dir = Path("outputs/calibration_ui")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -157,6 +174,13 @@ def run_deployment_ui(
 ):
     if not files:
         return None, "Please upload one or more timelapse frames."
+
+    if deploy is None:
+        return (
+            None,
+            "⚠️ The currently installed version of `imagetochaste` in this container is older than v0.2.0.\n"
+            "Please click **Factory reboot** in your Space Settings (or update `requirements.txt`) to pull v0.2.0.",
+        )
 
     adapter = get_adapter()
     deploy_in = Path("outputs/deploy_ui_input")
