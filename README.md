@@ -65,7 +65,6 @@ flowchart LR
 - **🏛️ Direct Chaste Simulation Compatibility**:
   - `NodesOnlyMesh` for off-lattice / center-based simulations (`NodeBasedCellPopulation<2>`).
   - `VertexMesh` for mechanical vertex model simulations (`VertexBasedCellPopulation<2>`).
-- **🛡️ Production Engineering**: Decoupled I/O, strict allowlist git hygiene, 100% typed, tested in GitHub Actions CI across Python 3.10 and 3.11.
 
 ---
 
@@ -153,17 +152,6 @@ Evaluation conducted on *Drosophila melanogaster* germband extension time-lapse 
 | **Frame 059** | 297 cells | 95.62% | **3.37%** (6.40% avg) |
 
 > **Key Finding**: Out-of-the-box SAM 2 AMG collapses on dense epithelial microscopy, creating single mega-masks spanning entire tissue colonies (65%–95% error). With `ImageToChaste`'s domain-specific hyperparameter search and statistical filtering, error drops to **0.0%–6.4%**, matching human expert annotation.
-
-### Pipeline Latency & Labor Efficiency
-
-| Task | Manual (ImageJ / Fiji) | CPU (Apple M-Series) | GPU (NVIDIA RTX / CUDA) |
-|---|---|---|---|
-| **Membrane Pre-processing** | N/A | ~0.08 s | ~0.02 s |
-| **Cell Segmentation** | ~45 – 90 mins | ~14.2 s | **~0.65 s** |
-| **Mesh Generation & ASCII Export** | ~15 – 30 mins | ~0.15 s | ~0.15 s |
-| **Total Turnaround Time** | **~1 – 2 hours / scan** | **~14.5 s** | **~0.82 s** |
-
-> **Impact**: **>99% reduction in manual tracing labor** with mathematically guaranteed topological invariants (non-self-intersecting polygonal elements and counter-clockwise vertex orientation).
 
 ---
 
@@ -270,46 +258,6 @@ pytest tests/ -v
 
 # Run code style linter
 ruff check .
-```
-
----
-
-## 📜 Citation & Credits
-
-If you use `ImageToChaste` in academic research, please cite:
-
-```bibtex
-@mastersthesis{chanda2025imagetochaste,
-  author       = {Proshanto Chanda},
-  title        = {Automatic Segmentation and Conversion of Cell Data from Microscope Images},
-  school       = {University of Oxford},
-  year         = {2025},
-  note         = {Master of Computer Science and Philosophy, Trinity Term}
-}
-```
-
-Biological dataset citation:
-```bibtex
-@article{blankenship2006multicellular,
-  title={Multicellular rosette formation links planar cell polarity to tissue morphogenesis},
-  author={Blankenship, J Todd and Backovic, S Teresa and Sanny, J Sanny P and Weitz, Oleg and Zallen, Jennifer A},
-  journal={Developmental Cell},
-  volume={11},
-  number={4},
-  pages={459--470},
-  year={2006},
-  publisher={Elsevier}
-}
-```
-
-Meta's SAM 2 foundation model:
-```bibtex
-@article{ravi2024sam2,
-  title={SAM 2: Segment Anything in Images and Videos},
-  author={Ravi, Nikhila and Gabeur, Valentin and Hu, Yuan-Ting and Hu, Ronghang and Ryali, Chaitanya and Ma, Tengyu and Khedr, Haitham and R{\"a}dle, Roman and Rolland, Chloe and Gustafson, Laura and others},
-  journal={arXiv preprint arXiv:2408.00714},
-  year={2024}
-}
 ```
 
 ---
