@@ -3,7 +3,6 @@ Helper utility to download official Meta SAM 2 release model checkpoints.
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import requests
@@ -46,6 +45,7 @@ def download_checkpoint(model_type: str = "large", output_dir: str = "checkpoint
     total_bytes = int(response.headers.get("content-length", 0))
     chunk_size = 1024 * 1024  # 1 MB
     downloaded_bytes = 0
+    last_reported_pct = 0
 
     with open(dest_file, "wb") as f:
         for chunk in response.iter_content(chunk_size=chunk_size):
@@ -53,13 +53,14 @@ def download_checkpoint(model_type: str = "large", output_dir: str = "checkpoint
                 f.write(chunk)
                 downloaded_bytes += len(chunk)
                 if total_bytes > 0:
-                    percent = (downloaded_bytes / total_bytes) * 100
-                    mb_downloaded = downloaded_bytes / (1024 * 1024)
-                    mb_total = total_bytes / (1024 * 1024)
-                    sys.stdout.write(f"\rProgress: {mb_downloaded:.1f} MB / {mb_total:.1f} MB ({percent:.1f}%)")
-                    sys.stdout.flush()
+                    percent = int((downloaded_bytes / total_bytes) * 100)
+                    if percent >= last_reported_pct + 25:
+                        last_reported_pct = percent
+                        mb_downloaded = downloaded_bytes / (1024 * 1024)
+                        mb_total = total_bytes / (1024 * 1024)
+                        print(f"Downloading checkpoint: {mb_downloaded:.1f} MB / {mb_total:.1f} MB ({percent}%)")
 
-    sys.stdout.write("\nDownload complete!\n")
+    print(f"Download complete: {dest_file} ({dest_file.stat().st_size / (1024*1024):.1f} MB)")
     return dest_file
 
 

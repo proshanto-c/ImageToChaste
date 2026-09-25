@@ -58,14 +58,7 @@ def get_adapter():
     return _ADAPTER
 
 
-# Pre-warm / load adapter at startup for ZeroGPU optimization
-try:
-    _ADAPTER = get_adapter()
-except Exception as e:
-    print(f"Deferred adapter initialization: {e}")
-
-
-@spaces.GPU
+@spaces.GPU(duration=120)
 def process_microscopy_scan(image: Image.Image, preprocess: bool, mode: str):
     if image is None:
         return None, None, None, "Please upload or select a microscopy image."
@@ -112,7 +105,7 @@ def process_microscopy_scan(image: Image.Image, preprocess: bool, mode: str):
         return overlay, str(node_f), str(elem_f), f"{summary_text}\n\nNodes preview:\n{nodes_preview}"
 
 
-@spaces.GPU
+@spaces.GPU(duration=120)
 def run_calibration_ui(image: Image.Image, expected_cells: Optional[int], preprocess: bool):
     if image is None:
         return None, None, None, "Please upload a reference training frame.", None
@@ -165,7 +158,7 @@ def run_calibration_ui(image: Image.Image, expected_cells: Optional[int], prepro
     return img_cons, img_bal, img_sens, "\n".join(lines), calib_json
 
 
-@spaces.GPU
+@spaces.GPU(duration=120)
 def run_deployment_ui(
     files: List[gr.utils.NamedString],
     calib_file: Optional[gr.utils.NamedString],
