@@ -1,7 +1,48 @@
-dev/
-data/
-sam/
-outs/
-chaste_files/
-build/
-.vscode/
+# Ignore everything by default (strict allowlist approach)
+/*
+
+# Allow root configuration and documentation files
+!/.gitignore
+!/LICENSE
+!/README.md
+!/environment.yml
+!/pyproject.toml
+!/requirements.txt
+
+# Allow GitHub configuration and CI workflows
+!/.github/
+!/.github/**
+
+# Allow sample data folder
+!/data/
+!/data/sample/
+!/data/sample/**
+
+# Allow documentation
+!/docs/
+!/docs/**
+
+# Allow main library source code
+!/imagetochaste/
+!/imagetochaste/**
+
+# Allow test suite
+!/tests/
+!/tests/**
+
+# Allow archived legacy thesis scripts
+!/legacy/
+!/legacy/**
+
+# Re-ignore runtime artifacts, build files, model weights, and OS metadata
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/*.pt
+**/*.pth
+**/*.onnx
+**/*.bin
+**/.DS_Store
+**/._*
+**/.pytest_cache/
+**/.ruff_cache/
