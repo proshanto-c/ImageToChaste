@@ -61,3 +61,44 @@ DEFAULT_FILTER_PARAMS: Dict[str, float] = {
     "stage1_std_multiplier": 3.0,
     "stage2_std_multiplier": 2.0,
 }
+
+# Presets calibrated for different microscopy modalities & cell densities
+AMG_PRESETS: Dict[str, Dict[str, Any]] = {
+    "conservative": {
+        "points_per_side": 32,
+        "points_per_batch": 128,
+        "pred_iou_thresh": 0.85,
+        "stability_score_thresh": 0.35,
+        "crop_n_layers": 1,
+        "crop_nms_thresh": 0.70,
+        "crop_overlap_ratio": 512 / 1500,
+        "min_mask_region_area": 15,
+        "use_m2m": False,
+        "multimask_output": True,
+    },
+    "balanced": dict(DEFAULT_AMG_PARAMS),  # Oxford thesis calibrated default
+    "sensitive": {
+        "points_per_side": 32,
+        "points_per_batch": 128,
+        "pred_iou_thresh": 0.65,
+        "stability_score_thresh": 0.12,
+        "crop_n_layers": 2,
+        "crop_nms_thresh": 0.70,
+        "crop_overlap_ratio": 512 / 1500,
+        "min_mask_region_area": 8,
+        "use_m2m": False,
+        "multimask_output": True,
+    },
+}
+
+# Parameter search space from thesis amg_tuning.py
+AMG_PARAM_SPACE: Dict[str, Any] = {
+    "pred_iou_thresh": (0.50, 0.90),
+    "stability_score_thresh": (0.10, 0.50),
+    "crop_n_layers": [0, 1, 2],
+    "crop_nms_thresh": (0.50, 0.90),
+    "crop_overlap_ratio": (0.2, 0.5),
+    "min_mask_region_area": (5, 25),
+    "use_m2m": [False],
+}
+

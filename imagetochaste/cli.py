@@ -142,6 +142,27 @@ def main():
     run_parser.add_argument("--no-filter", action="store_true", help="Disable statistical area outlier filtering.")
     run_parser.add_argument("--visualize", default=None, help="Optional output path to save overlay image (e.g. out.png).")
 
+    # 'calibrate' subcommand
+    calib_parser = subparsers.add_parser("calibrate", help="Calibrate SAM 2 parameters using reference training frames and target cell count.")
+    calib_parser.add_argument("-i", "--input", required=True, nargs="+", help="One or more reference training image paths.")
+    calib_parser.add_argument("--expected-cells", type=int, default=None, help="Approximate expected cell count in the training image.")
+    calib_parser.add_argument("--profiles", nargs="+", default=["conservative", "balanced", "sensitive"], help="Presets to evaluate.")
+    calib_parser.add_argument("--random-runs", type=int, default=0, help="Number of random parameter exploration runs.")
+    calib_parser.add_argument("-o", "--output-dir", default="outputs/calibration", help="Directory where calibration.json and previews will be saved.")
+    calib_parser.add_argument("--checkpoint", default="checkpoints/sam2_hiera_large.pt", help="Path to SAM 2 weights.")
+    calib_parser.add_argument("--device", default="auto", help="Compute device: auto, cuda, mps, cpu.")
+    calib_parser.add_argument("--no-preprocess", action="store_true", help="Disable CLAHE preprocessing.")
+
+    # 'deploy' subcommand
+    deploy_parser = subparsers.add_parser("deploy", help="Deploy calibrated parameters across a sequence of timelapse microscopy frames.")
+    deploy_parser.add_argument("-i", "--input", required=True, help="Directory containing timelapse images or image pattern.")
+    deploy_parser.add_argument("-c", "--config", required=True, help="Path to calibration.json file from 'calibrate'.")
+    deploy_parser.add_argument("-o", "--output-dir", default="outputs/deployed", help="Directory to save per-frame Chaste meshes.")
+    deploy_parser.add_argument("--mode", default="voronoi", choices=["voronoi", "centroids"], help="Chaste mesh format: voronoi (VertexMesh) or centroids (NodesOnlyMesh).")
+    deploy_parser.add_argument("--checkpoint", default="checkpoints/sam2_hiera_large.pt", help="Path to SAM 2 weights.")
+    deploy_parser.add_argument("--device", default="auto", help="Compute device: auto, cuda, mps, cpu.")
+    deploy_parser.add_argument("--no-preprocess", action="store_true", help="Disable CLAHE preprocessing.")
+
     # 'download-weights' subcommand
     dl_parser = subparsers.add_parser("download-weights", help="Download official Meta SAM 2 model checkpoints.")
     dl_parser.add_argument("--model", default="large", choices=["tiny", "small", "base_plus", "large", "sam2.1_large"], help="SAM 2 architecture variant.")
@@ -174,6 +195,36 @@ def main():
             filter_area=not args.no_filter,
             visualize_path=args.visualize,
         )
+    elif args.command == "calibrate":
+        from imagetochaste.calibration import calibrate
+        res = calibrate(
+            images=args.input,
+            expected_cell_count=args.expected_cells,
+            candidate_profiles=args.profiles,
+            num_random_candidates=args.random_runs,
+            checkpoint=args.checkpoint,
+            device=args.device,
+            preprocess=not args.no_preprocess,
+            output_dir=args.output_dir,
+        )
+        print(f"\n✅ Calibration complete! Best profile selected: '{res['best_profile']}'")
+        if res.get("expected_cell_count"):
+            print(f"Target count: {res['expected_cell_count']} | Detected count: {res['mean_detected_count']} (Error: {res['percent_error']}%)")
+        print(f"Saved calibration profile to: {res.get('calibration_file', args.output_dir)}")
+    elif args.command == "deploy":
+        from imagetochaste.calibration import deploy
+        res = deploy(
+            images=args.input,
+            calibration=args.config,
+            output_dir=args.output_dir,
+            mode=args.mode,
+            checkpoint=args.checkpoint,
+            device=args.device,
+            preprocess=not args.no_preprocess,
+        )
+        print(f"\n✅ Batch deployment complete! Processed {res['total_frames_processed']} frames in {res['total_batch_time_seconds']}s.")
+        print(f"Total cells segmented: {res['total_cells_detected']} (avg {res['average_cells_per_frame']} cells/frame).")
+        print(f"Summary report written to: {res.get('summary_file')}")
     elif args.command == "download-weights":
         download_checkpoint(model_type=args.model, output_dir=args.output_dir)
     elif args.command == "export":

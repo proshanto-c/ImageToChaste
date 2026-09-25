@@ -3,8 +3,9 @@ ImageToChaste: Turn microscopy images into Chaste C++ simulation meshes
 using Meta's Segment Anything Model 2 (SAM 2).
 """
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
+from imagetochaste.calibration import calibrate, deploy
 from imagetochaste.exporters.base import ChasteMesh, Element, Node
 from imagetochaste.exporters.chaste_formatter import (
     export_chaste_nodes,
@@ -30,6 +31,8 @@ from imagetochaste.segmentation.sam_adapter import SAMAdapter
 __all__ = [
     "__version__",
     "SAMAdapter",
+    "calibrate",
+    "deploy",
     "preprocess_microscopy_image",
     "filter_masks_by_area",
     "extract_contours",

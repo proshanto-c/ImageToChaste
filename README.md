@@ -130,11 +130,47 @@ imagetochaste run \
   --mode voronoi
 ```
 
-Generated outputs in `outputs/`:
-- `cells.nodes`: Chaste `.nodes` file with node indices, $(x, y)$ coordinates, and boundary markers.
-- `cells.json`: Companion JSON coordinates for analytical inspections.
-- `vertex_mesh.nodes` & `vertex_mesh.elements`: Chaste VertexMesh file pair.
-- `segmentation_overlay.png`: Visual verification image.
+---
+
+### Step 4: Calibrate & Deploy Across Timelapse Sequences
+
+In line with the Oxford Master's thesis methodology, `ImageToChaste` includes dedicated **calibration** and **batch deployment** pipelines to tune model thresholds on training frames and deploy them across entire timelapse movies:
+
+```bash
+# 1. Calibrate on a reference training frame with an approximate target cell count (~300)
+imagetochaste calibrate \
+  -i data/sample/drosophila_germband_f009.png \
+  --expected-cells 300 \
+  -o outputs/calibration/
+
+# 2. Deploy locked parameters across a sequence of timelapse frames
+imagetochaste deploy \
+  -i data/timelapse/ \
+  -c outputs/calibration/calibration.json \
+  -o outputs/timelapse_meshes/ \
+  --mode voronoi
+```
+
+#### Python API:
+```python
+from imagetochaste import calibrate, deploy
+
+# Calibrate against reference training frame
+calib = calibrate(
+    images="data/sample/drosophila_germband_f009.png",
+    expected_cell_count=300,
+    output_dir="outputs/calibration",
+)
+
+# Deploy locked parameters across all timelapse frames
+summary = deploy(
+    images="data/timelapse/",
+    calibration=calib,
+    output_dir="outputs/timelapse_meshes",
+    mode="voronoi",
+)
+print(f"Processed {summary['total_frames_processed']} frames in {summary['total_batch_time_seconds']}s.")
+```
 
 ---
 
