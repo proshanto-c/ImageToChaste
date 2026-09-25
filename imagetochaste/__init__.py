@@ -12,7 +12,11 @@ from imagetochaste.exporters.chaste_formatter import (
     format_elements_string,
     format_nodes_string,
 )
-from imagetochaste.geometry.centroids import compute_centroid, compute_polygon_centroid
+from imagetochaste.geometry.centroids import (
+    compute_centroid,
+    compute_centroids_from_masks,
+    compute_polygon_centroid,
+)
 from imagetochaste.geometry.contours import extract_all_contours, extract_contours
 from imagetochaste.geometry.mesh_builder import (
     build_skeleton_junction_mesh,
@@ -31,6 +35,7 @@ __all__ = [
     "extract_contours",
     "extract_all_contours",
     "compute_centroid",
+    "compute_centroids_from_masks",
     "compute_polygon_centroid",
     "build_voronoi_mesh",
     "build_skeleton_junction_mesh",
