@@ -10,6 +10,7 @@
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![SAM 2](https://img.shields.io/badge/SAM%202-Meta%20AI-orange.svg)](https://github.com/facebookresearch/sam2)
 [![Chaste](https://img.shields.io/badge/Chaste-Oxford%20C%2B%2B-purple.svg)](https://chaste.github.io/)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/proshanto-c/ImageToChaste/blob/main/notebooks/quickstart.ipynb)
 
 <br/>
 

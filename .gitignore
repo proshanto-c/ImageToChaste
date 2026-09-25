@@ -34,6 +34,11 @@
 !/legacy/
 !/legacy/**
 
+# Allow interactive notebooks
+!/notebooks/
+!/notebooks/**
+**/.ipynb_checkpoints/
+
 # Re-ignore runtime artifacts, build files, model weights, and OS metadata
 **/__pycache__/
 **/*.py[cod]
