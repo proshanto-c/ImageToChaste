@@ -40,8 +40,28 @@ except ImportError:
     try:
         from imagetochaste.calibration import calibrate, deploy
     except ImportError:
-        calibrate = None
-        deploy = None
+        import subprocess
+        import sys
+
+        print("Updating imagetochaste in container...")
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    "--no-cache-dir",
+                    "git+https://github.com/proshanto-c/ImageToChaste.git@v0.2.1",
+                ],
+                check=True,
+            )
+            from imagetochaste.calibration import calibrate, deploy
+        except Exception as e:
+            print(f"Auto-upgrade notice: {e}")
+            calibrate = None
+            deploy = None
 
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
