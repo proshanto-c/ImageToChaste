@@ -5,6 +5,16 @@ Can be run locally or deployed directly to Hugging Face Spaces.
 
 from pathlib import Path
 
+try:
+    import spaces
+except ImportError:
+    class spaces:
+        @staticmethod
+        def GPU(func=None, **kwargs):
+            if func is not None and callable(func):
+                return func
+            return lambda f: f
+
 import gradio as gr
 import numpy as np
 from PIL import Image
@@ -24,7 +34,7 @@ except ImportError:
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
 
-# Global adapter instance initialized lazily
+# Global adapter instance
 _ADAPTER = None
 
 
@@ -36,6 +46,14 @@ def get_adapter():
     return _ADAPTER
 
 
+# Pre-warm / load adapter at startup for ZeroGPU optimization
+try:
+    _ADAPTER = get_adapter()
+except Exception as e:
+    print(f"Deferred adapter initialization: {e}")
+
+
+@spaces.GPU
 def process_microscopy_scan(image: Image.Image, preprocess: bool, mode: str):
     if image is None:
         return None, None, None, "Please upload or select a microscopy image."

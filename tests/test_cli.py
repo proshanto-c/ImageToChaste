@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from imagetochaste import __version__
+
 
 def test_cli_version():
     res = subprocess.run(
@@ -15,7 +17,7 @@ def test_cli_version():
         text=True,
     )
     assert res.returncode == 0
-    assert "imagetochaste 0.1.0" in res.stdout
+    assert f"imagetochaste {__version__}" in res.stdout
 
 
 def test_cli_info():
@@ -25,7 +27,7 @@ def test_cli_info():
         text=True,
     )
     assert res.returncode == 0
-    assert "ImageToChaste Version: 0.1.0" in res.stdout
+    assert f"ImageToChaste Version: {__version__}" in res.stdout
     assert "Python Version:" in res.stdout
 
 
