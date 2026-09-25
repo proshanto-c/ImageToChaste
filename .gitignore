@@ -8,6 +8,7 @@
 !/environment.yml
 !/pyproject.toml
 !/requirements.txt
+!/app.py
 
 # Allow GitHub configuration and CI workflows
 !/.github/
