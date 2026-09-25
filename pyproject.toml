@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imagetochaste"
-version = "0.1.1"
+version = "0.1.2"
 description = "Automated cell segmentation from microscopy scans via SAM 2 into Chaste C++ simulation meshes"
 readme = "README.md"
 authors = [

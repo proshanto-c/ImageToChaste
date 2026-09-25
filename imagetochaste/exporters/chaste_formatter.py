@@ -92,6 +92,7 @@ def export_chaste_nodes(
     output_path: Union[str, Path],
     header_style: str = "simple",
     precision: int = 6,
+    create_chaste_native_alias: bool = True,
 ) -> Path:
     """
     Export nodes or cell centroids to a Chaste-compatible .nodes ASCII file.
@@ -101,6 +102,7 @@ def export_chaste_nodes(
         output_path: Destination path for .nodes file.
         header_style: 'simple' or 'extended'.
         precision: Float coordinate precision.
+        create_chaste_native_alias: Whether to also write .node (or .nodes) alias.
 
     Returns:
         Path to written file.
@@ -112,6 +114,14 @@ def export_chaste_nodes(
     with open(out_file, "w", encoding="utf-8") as f:
         f.write(content)
 
+    if create_chaste_native_alias:
+        if out_file.suffix == ".nodes":
+            with open(out_file.with_suffix(".node"), "w", encoding="utf-8") as f:
+                f.write(content)
+        elif out_file.suffix == ".node":
+            with open(out_file.with_suffix(".nodes"), "w", encoding="utf-8") as f:
+                f.write(content)
+
     return out_file
 
 
@@ -120,25 +130,30 @@ def export_chaste_vertex_mesh(
     base_output_path: Union[str, Path],
     nodes_header_style: str = "extended",
     precision: int = 6,
+    write_chaste_native_extensions: bool = True,
 ) -> Tuple[Path, Path]:
     """
     Export a complete Chaste VertexMesh (both .nodes and .elements files).
 
+    Also writes native Chaste C++ files (.node and .cell) so that Oxford Chaste's
+    VertexMeshReader<2, 2> can load the mesh directly from the base path.
+
     Given base path '/path/to/cell_mesh', writes:
-      - /path/to/cell_mesh.nodes (or .node)
-      - /path/to/cell_mesh.elements (or .element)
+      - /path/to/cell_mesh.nodes and /path/to/cell_mesh.node
+      - /path/to/cell_mesh.elements and /path/to/cell_mesh.cell
 
     Args:
         mesh: ChasteMesh instance containing nodes and elements.
         base_output_path: Base path without extension or path ending in .nodes / .elements.
         nodes_header_style: 'extended' or 'simple'.
         precision: Coordinate float precision.
+        write_chaste_native_extensions: Whether to also generate native .node and .cell files.
 
     Returns:
         Tuple of (nodes_file_path, elements_file_path).
     """
     base = Path(base_output_path)
-    if base.suffix in [".nodes", ".node", ".elements", ".element", ".txt"]:
+    if base.suffix in [".nodes", ".node", ".elements", ".element", ".cell", ".ele", ".txt"]:
         base_stem = base.with_suffix("")
     else:
         base_stem = base
@@ -156,6 +171,13 @@ def export_chaste_vertex_mesh(
     elements_content = format_elements_string(mesh.elements)
     with open(elements_file, "w", encoding="utf-8") as f:
         f.write(elements_content)
+
+    # Also write native Chaste C++ extensions (.node and .cell) for VertexMeshReader
+    if write_chaste_native_extensions:
+        with open(base_stem.with_suffix(".node"), "w", encoding="utf-8") as f:
+            f.write(nodes_content)
+        with open(base_stem.with_suffix(".cell"), "w", encoding="utf-8") as f:
+            f.write(elements_content)
 
     return nodes_file, elements_file
 

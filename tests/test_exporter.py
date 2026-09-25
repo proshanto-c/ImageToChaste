@@ -70,13 +70,15 @@ def test_export_chaste_nodes_file(tmp_path: Path):
     exported_path = export_chaste_nodes(coords, out_file)
 
     assert exported_path.exists()
+    assert (tmp_path / "test_cells.node").exists()
     content = exported_path.read_text()
     assert "2\n0 100.000000 200.000000 0\n" in content
 
 
 def test_export_chaste_vertex_mesh_files(tmp_path: Path):
     """
-    Test combined export of both .nodes and .elements files for VertexMesh.
+    Test combined export of both .nodes and .elements files for VertexMesh,
+    including Chaste native .node and .cell files.
     """
     nodes = [
         Node(node_id=0, x=0.0, y=0.0),
@@ -96,6 +98,9 @@ def test_export_chaste_vertex_mesh_files(tmp_path: Path):
     assert elem_f.exists()
     assert node_f.name == "output_mesh.nodes"
     assert elem_f.name == "output_mesh.elements"
+    # Verify native Oxford Chaste extensions for VertexMeshReader
+    assert (tmp_path / "output_mesh.node").exists()
+    assert (tmp_path / "output_mesh.cell").exists()
 
 
 def test_export_centroids_json(tmp_path: Path):

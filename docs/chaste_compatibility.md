@@ -14,10 +14,16 @@
 
 ---
 
-## 2. File Syntax Specifications
+## 2. File Syntax & Extension Specifications
 
-### 2.1 Nodes File (`*.nodes`)
-Chaste reads `.nodes` files via `VertexMeshReader` or `NodesOnlyMesh`:
+In Oxford Chaste C++, mesh readers take a **base file path** and automatically append native extensions:
+- **`VertexMeshReader<2, 2>("path/to/mesh")`** opens `path/to/mesh.node` and `path/to/mesh.cell`.
+- **`TrianglesMeshReader<2, 2>("path/to/mesh")`** opens `path/to/mesh.node` and `path/to/mesh.ele`.
+
+In computational biology literature and thesis exploratory scripts, researchers frequently name these `.nodes` and `.elements`. To provide seamless compatibility for both Chaste C++ binaries and research workflows, `ImageToChaste` **automatically outputs both pairs** (`.node` / `.cell` and `.nodes` / `.elements`).
+
+### 2.1 Nodes File (`*.node` / `*.nodes`)
+Header and line syntax parsed by Chaste:
 
 ```text
 <num_nodes> [optional: <num_dims> <num_attributes> <num_boundary_markers>]
@@ -26,7 +32,7 @@ Chaste reads `.nodes` files via `VertexMeshReader` or `NodesOnlyMesh`:
 
 #### Example Output:
 ```text
-208
+208 2 0 1
 0 364.765625 124.750000 0
 1 330.715013 140.430025 0
 2 328.043478 171.568116 0
@@ -38,8 +44,8 @@ Chaste reads `.nodes` files via `VertexMeshReader` or `NodesOnlyMesh`:
 
 ---
 
-### 2.2 Elements File (`*.elements`)
-Chaste reads `.elements` files via `VertexMeshReader`:
+### 2.2 Elements / Cells File (`*.cell` / `*.elements`)
+Header and line syntax parsed by Chaste `VertexMeshReader`:
 
 ```text
 <num_elements> <num_attributes>
