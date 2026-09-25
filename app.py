@@ -1,6 +1,6 @@
 """
 Gradio web application for ImageToChaste.
-Can be run locally or deployed directly to Hugging Face Spaces with ZeroGPU.
+Runs seamlessly on CPU Basic (Free Tier) or Hugging Face Spaces with ZeroGPU.
 """
 
 import json
@@ -9,18 +9,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-try:
-    import spaces
-except ImportError:
-    class spaces:
-        @staticmethod
-        def GPU(func=None, **kwargs):
-            if func is not None and callable(func):
-                return func
-            return lambda f: f
-
 import gradio as gr
 import numpy as np
+import torch
 from PIL import Image
 
 from imagetochaste import (
@@ -39,6 +30,28 @@ except ImportError:
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
 
+# Check hardware environment: automatically handle CPU Basic vs ZeroGPU
+IS_CPU = not torch.cuda.is_available()
+
+if not IS_CPU:
+    try:
+        import spaces
+    except ImportError:
+        class spaces:
+            @staticmethod
+            def GPU(func=None, **kwargs):
+                if func is not None and callable(func):
+                    return func
+                return lambda f: f
+else:
+    # On CPU Basic, make spaces.GPU a strict no-op so no ZeroGPU quota is requested
+    class spaces:
+        @staticmethod
+        def GPU(func=None, **kwargs):
+            if func is not None and callable(func):
+                return func
+            return lambda f: f
+
 # Global adapter instance
 _ADAPTER = None
 
@@ -47,7 +60,8 @@ def get_adapter():
     global _ADAPTER
     if _ADAPTER is None:
         checkpoint = download_checkpoint(model_type="tiny", output_dir="checkpoints")
-        _ADAPTER = SAMAdapter(checkpoint=checkpoint, device="auto")
+        dev = "cpu" if IS_CPU else "auto"
+        _ADAPTER = SAMAdapter(checkpoint=checkpoint, device=dev)
     return _ADAPTER
 
 
@@ -126,14 +140,18 @@ def safe_generate_masks(
     return adapter.generate_masks(image_arr, amg_params=cand_params, filter_area=True)
 
 
-# Master's thesis calibrated AMG presets
+# AMG presets calibrated for microscopy (automatically balanced for CPU vs GPU)
+POINTS_PER_SIDE = 24 if IS_CPU else 32
+POINTS_PER_BATCH = 64 if IS_CPU else 128
+CROP_LAYERS = 1 if IS_CPU else 2
+
 AMG_PRESETS = {
     "conservative": {
-        "points_per_side": 32,
-        "points_per_batch": 128,
+        "points_per_side": POINTS_PER_SIDE,
+        "points_per_batch": POINTS_PER_BATCH,
         "pred_iou_thresh": 0.85,
         "stability_score_thresh": 0.35,
-        "crop_n_layers": 1,
+        "crop_n_layers": 0 if IS_CPU else 1,
         "crop_nms_thresh": 0.70,
         "crop_overlap_ratio": 512 / 1500,
         "min_mask_region_area": 15,
@@ -141,11 +159,11 @@ AMG_PRESETS = {
         "multimask_output": True,
     },
     "balanced": {
-        "points_per_side": 32,
-        "points_per_batch": 128,
+        "points_per_side": POINTS_PER_SIDE,
+        "points_per_batch": POINTS_PER_BATCH,
         "pred_iou_thresh": 0.75,
         "stability_score_thresh": 0.20,
-        "crop_n_layers": 2,
+        "crop_n_layers": CROP_LAYERS,
         "crop_nms_thresh": 0.70,
         "crop_overlap_ratio": 512 / 1500,
         "min_mask_region_area": 10,
@@ -153,11 +171,11 @@ AMG_PRESETS = {
         "multimask_output": True,
     },
     "sensitive": {
-        "points_per_side": 32,
-        "points_per_batch": 128,
+        "points_per_side": POINTS_PER_SIDE,
+        "points_per_batch": POINTS_PER_BATCH,
         "pred_iou_thresh": 0.65,
         "stability_score_thresh": 0.12,
-        "crop_n_layers": 2,
+        "crop_n_layers": CROP_LAYERS,
         "crop_nms_thresh": 0.70,
         "crop_overlap_ratio": 512 / 1500,
         "min_mask_region_area": 8,
@@ -382,7 +400,11 @@ def process_microscopy_scan(image: Any, preprocess: bool, mode: str):
 
     # 2. Segment using SAM 2
     adapter = get_adapter()
-    masks, stats = adapter.generate_masks(working_img, filter_area=True)
+    masks, stats = adapter.generate_masks(
+        working_img,
+        filter_area=True,
+        amg_params=AMG_PRESETS["balanced"] if IS_CPU else None,
+    )
 
     if not masks:
         return (
@@ -549,8 +571,13 @@ def run_deployment_ui(
 # Build Multi-Tab Gradio Application
 with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
     gr.Markdown("# 🔬 ImageToChaste")
+    mode_badge = (
+        "🖥️ **Running on CPU Basic (Free Tier)** — SAM 2 'tiny' with CPU-balanced parameters."
+        if IS_CPU
+        else "⚡ **Running on ZeroGPU** — Accelerated with NVIDIA GPU."
+    )
     gr.Markdown(
-        "Automated Cell Segmentation from Microscopy Scans via Meta's SAM 2 into Oxford Chaste C++ Simulation Meshes."
+        f"Automated Cell Segmentation from Microscopy Scans via Meta's SAM 2 into Oxford Chaste C++ Simulation Meshes.\n\n{mode_badge}"
     )
 
     with gr.Tabs():
