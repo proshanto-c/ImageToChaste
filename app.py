@@ -1,6 +1,6 @@
 """
 Gradio web application for ImageToChaste.
-Runs seamlessly on CPU Basic (Free Tier) or Hugging Face Spaces with ZeroGPU.
+Deployed directly to Hugging Face Spaces with ZeroGPU (NVIDIA RTX Pro 6000 Blackwell).
 """
 
 import json
@@ -8,6 +8,16 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+try:
+    import spaces
+except ImportError:
+    class spaces:
+        @staticmethod
+        def GPU(func=None, **kwargs):
+            if func is not None and callable(func):
+                return func
+            return lambda f: f
 
 import gradio as gr
 import numpy as np
@@ -30,38 +40,23 @@ except ImportError:
 from imagetochaste.download_weights import download_checkpoint
 from imagetochaste.segmentation.utils import create_mask_overlay
 
-# Check hardware environment: automatically handle CPU Basic vs ZeroGPU
-IS_CPU = not torch.cuda.is_available()
-
-if not IS_CPU:
-    try:
-        import spaces
-    except ImportError:
-        class spaces:
-            @staticmethod
-            def GPU(func=None, **kwargs):
-                if func is not None and callable(func):
-                    return func
-                return lambda f: f
-else:
-    # On CPU Basic, make spaces.GPU a strict no-op so no ZeroGPU quota is requested
-    class spaces:
-        @staticmethod
-        def GPU(func=None, **kwargs):
-            if func is not None and callable(func):
-                return func
-            return lambda f: f
-
 # Global adapter instance
 _ADAPTER = None
 
 
 def get_adapter():
+    """
+    Lazily obtain the SAM 2 adapter.
+    When invoked inside a @spaces.GPU context, dynamically selects CUDA.
+    """
     global _ADAPTER
     if _ADAPTER is None:
         checkpoint = download_checkpoint(model_type="tiny", output_dir="checkpoints")
-        dev = "cpu" if IS_CPU else "auto"
+        dev = "cuda" if torch.cuda.is_available() else "auto"
         _ADAPTER = SAMAdapter(checkpoint=checkpoint, device=dev)
+    elif torch.cuda.is_available() and _ADAPTER.device.type != "cuda":
+        _ADAPTER.device = torch.device("cuda")
+        _ADAPTER.model.to("cuda")
     return _ADAPTER
 
 
@@ -140,18 +135,14 @@ def safe_generate_masks(
     return adapter.generate_masks(image_arr, amg_params=cand_params, filter_area=True)
 
 
-# AMG presets calibrated for microscopy (automatically balanced for CPU vs GPU)
-POINTS_PER_SIDE = 24 if IS_CPU else 32
-POINTS_PER_BATCH = 64 if IS_CPU else 128
-CROP_LAYERS = 1 if IS_CPU else 2
-
+# Master's thesis calibrated AMG presets for ZeroGPU acceleration
 AMG_PRESETS = {
     "conservative": {
-        "points_per_side": POINTS_PER_SIDE,
-        "points_per_batch": POINTS_PER_BATCH,
+        "points_per_side": 32,
+        "points_per_batch": 128,
         "pred_iou_thresh": 0.85,
         "stability_score_thresh": 0.35,
-        "crop_n_layers": 0 if IS_CPU else 1,
+        "crop_n_layers": 1,
         "crop_nms_thresh": 0.70,
         "crop_overlap_ratio": 512 / 1500,
         "min_mask_region_area": 15,
@@ -159,11 +150,11 @@ AMG_PRESETS = {
         "multimask_output": True,
     },
     "balanced": {
-        "points_per_side": POINTS_PER_SIDE,
-        "points_per_batch": POINTS_PER_BATCH,
+        "points_per_side": 32,
+        "points_per_batch": 128,
         "pred_iou_thresh": 0.75,
         "stability_score_thresh": 0.20,
-        "crop_n_layers": CROP_LAYERS,
+        "crop_n_layers": 2,
         "crop_nms_thresh": 0.70,
         "crop_overlap_ratio": 512 / 1500,
         "min_mask_region_area": 10,
@@ -171,11 +162,11 @@ AMG_PRESETS = {
         "multimask_output": True,
     },
     "sensitive": {
-        "points_per_side": POINTS_PER_SIDE,
-        "points_per_batch": POINTS_PER_BATCH,
+        "points_per_side": 32,
+        "points_per_batch": 128,
         "pred_iou_thresh": 0.65,
         "stability_score_thresh": 0.12,
-        "crop_n_layers": CROP_LAYERS,
+        "crop_n_layers": 2,
         "crop_nms_thresh": 0.70,
         "crop_overlap_ratio": 512 / 1500,
         "min_mask_region_area": 8,
@@ -384,7 +375,7 @@ def run_deploy(
     return summary_payload
 
 
-@spaces.GPU(duration=120)
+@spaces.GPU(duration=30)
 def process_microscopy_scan(image: Any, preprocess: bool, mode: str):
     if image is None:
         return None, None, None, "Please upload or select a microscopy image."
@@ -398,13 +389,9 @@ def process_microscopy_scan(image: Any, preprocess: bool, mode: str):
     else:
         working_img = img_arr
 
-    # 2. Segment using SAM 2
+    # 2. Segment using SAM 2 on GPU
     adapter = get_adapter()
-    masks, stats = adapter.generate_masks(
-        working_img,
-        filter_area=True,
-        amg_params=AMG_PRESETS["balanced"] if IS_CPU else None,
-    )
+    masks, stats = adapter.generate_masks(working_img, filter_area=True)
 
     if not masks:
         return (
@@ -440,7 +427,7 @@ def process_microscopy_scan(image: Any, preprocess: bool, mode: str):
         return overlay, str(node_f), str(elem_f), f"{summary_text}\n\nNodes preview:\n{nodes_preview}"
 
 
-@spaces.GPU(duration=120)
+@spaces.GPU(duration=60)
 def run_calibration_ui(image: Any, expected_cells: Any, preprocess: bool):
     if image is None:
         return None, None, None, "Please upload a reference training frame.", None
@@ -571,13 +558,9 @@ def run_deployment_ui(
 # Build Multi-Tab Gradio Application
 with gr.Blocks(title="ImageToChaste: Microscopy to Chaste C++ Meshes") as demo:
     gr.Markdown("# 🔬 ImageToChaste")
-    mode_badge = (
-        "🖥️ **Running on CPU Basic (Free Tier)** — SAM 2 'tiny' with CPU-balanced parameters."
-        if IS_CPU
-        else "⚡ **Running on ZeroGPU** — Accelerated with NVIDIA GPU."
-    )
     gr.Markdown(
-        f"Automated Cell Segmentation from Microscopy Scans via Meta's SAM 2 into Oxford Chaste C++ Simulation Meshes.\n\n{mode_badge}"
+        "Automated Cell Segmentation from Microscopy Scans via Meta's SAM 2 into Oxford Chaste C++ Simulation Meshes.\n\n"
+        "⚡ **Accelerated with ZeroGPU** (NVIDIA RTX Pro 6000 Blackwell)"
     )
 
     with gr.Tabs():
